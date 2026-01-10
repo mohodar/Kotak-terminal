@@ -1,0 +1,13 @@
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Ignore specific directories in the monorepo
+/steadfast-app/node_modules/
+/steadfast-api/node_modules/
+/steadfast-websocket/__pycache__/
+
+# Ignore nested .git directories
+# **/.git
