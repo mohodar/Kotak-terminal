@@ -31,8 +31,8 @@ reverse_token_map = {} # Maps Kotak's tk to Frontend's tk (e.g. "Nifty 50" -> "2
 def on_message(message):
     """Callback from Kotak SDK (runs in a separate thread)"""
     if loop and message:
-        # Log raw message snippet for debugging
-        # logger.info(f"SDK Raw Message (first 100): {str(message)[:100]}")
+        # Diagnostic logging for strikes
+        logger.info(f"SDK Message: {str(message)[:200]}...")
         
         # SDK often wraps messages like: {"type": "stock_feed", "data": [...]}
         if isinstance(message, dict) and 'data' in message:

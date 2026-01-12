@@ -32,17 +32,24 @@ export const setStoploss = (position, type) => {
 
   // Get a valid LTP value
   let ltp = parseFloat(positionLTPs.value[position.tsym])
-  if (isNaN(ltp)) {
-    console.error(`Invalid LTP for ${position.tsym}: ${positionLTPs.value[position.tsym]}`)
+  if (isNaN(ltp) || ltp <= 0) {
+    if (ltp === 0) {
+      console.warn(`LTP for ${position.tsym} is 0. Ignoring and checking fallbacks.`)
+    } else {
+      console.error(`Invalid LTP for ${position.tsym}: ${positionLTPs.value[position.tsym]}`)
+    }
+
     console.log('Using fallback LTP from position data')
-    // Try to get LTP from position data as fallback
-    const fallbackLtp = parseFloat(position.lp || position.avgPrice || position.prc)
-    if (isNaN(fallbackLtp)) {
-      console.error(`No valid LTP found for ${position.tsym}`)
+    // Try to get LTP from position data as fallback (lp, avgPrice, prc, or netavgprc for Kotak)
+    const fallbackLtp = parseFloat(position.lp || position.avgPrice || position.prc || position.netavgprc)
+
+    if (isNaN(fallbackLtp) || fallbackLtp <= 0) {
+      console.error(`No valid (>0) LTP found for ${position.tsym} (Fallback: ${fallbackLtp})`)
       return
     }
     ltp = fallbackLtp
     positionLTPs.value[position.tsym] = fallbackLtp
+    console.log(`Successfully used fallback LTP for ${position.tsym}: ${fallbackLtp}`)
   }
 
   // Ensure we have a valid stoploss value
@@ -174,17 +181,24 @@ export const setTarget = (position) => {
 
   // Get LTP from position data
   let ltp = parseFloat(positionLTPs.value[position.tsym])
-  if (isNaN(ltp)) {
-    console.error(`Invalid LTP for ${position.tsym}: ${positionLTPs.value[position.tsym]}`)
+  if (isNaN(ltp) || ltp <= 0) {
+    if (ltp === 0) {
+      console.warn(`LTP for ${position.tsym} is 0. Ignoring and checking fallbacks.`)
+    } else {
+      console.error(`Invalid LTP for ${position.tsym}: ${positionLTPs.value[position.tsym]}`)
+    }
+
     console.log('Using fallback LTP from position data')
-    // Try to get LTP from position data as fallback
-    const fallbackLtp = parseFloat(position.lp || position.avgPrice || position.prc)
-    if (isNaN(fallbackLtp)) {
-      console.error(`No valid LTP found for ${position.tsym}`)
+    // Try to get LTP from position data as fallback (lp, avgPrice, prc, or netavgprc)
+    const fallbackLtp = parseFloat(position.lp || position.avgPrice || position.prc || position.netavgprc)
+
+    if (isNaN(fallbackLtp) || fallbackLtp <= 0) {
+      console.error(`No valid (>0) LTP found for ${position.tsym} (Fallback: ${fallbackLtp})`)
       return
     }
     ltp = fallbackLtp
     positionLTPs.value[position.tsym] = fallbackLtp
+    console.log(`Successfully used fallback LTP for ${position.tsym}: ${fallbackLtp}`)
   }
 
   // Ensure we have a valid target value
@@ -281,16 +295,21 @@ export const checkStoplosses = () => {
 
     // If LTP is NaN or <= 0, try to get a fallback value from position data
     if (position && (isNaN(currentLTP) || currentLTP <= 0)) {
-      console.error(`Invalid LTP for ${tsym}: ${positionLTPs.value[tsym]}`)
-      console.log('Using fallback LTP from position data')
+      if (currentLTP === 0) {
+        // Log only occasionally or if it persists to avoid spam
+      } else {
+        console.error(`Invalid LTP for ${tsym}: ${positionLTPs.value[tsym]}`)
+      }
+
       // Try to get LTP from position data as fallback
-      const fallbackLtp = parseFloat(position.lp || position.avgPrice || position.prc)
-      if (!isNaN(fallbackLtp)) {
+      const fallbackLtp = parseFloat(position.lp || position.avgPrice || position.prc || position.netavgprc)
+      if (!isNaN(fallbackLtp) && fallbackLtp > 0) {
         console.log(`Using fallback LTP for ${tsym}: ${fallbackLtp}`)
         positionLTPs.value[tsym] = fallbackLtp
         continue // Restart the check for this position in the next cycle with the updated LTP
       } else {
-        console.error(`No valid LTP found for ${tsym}`)
+        // Only log error if both live LTP and fallback are invalid
+        if (currentLTP !== 0) console.error(`No valid LTP found for ${tsym}`)
         continue // Skip this position for now
       }
     }
@@ -468,16 +487,16 @@ export const checkTargets = (newLTPs) => {
 
     // If LTP is NaN or <= 0, try to get a fallback value from position data
     if (isNaN(currentLTP) || currentLTP <= 0) {
-      console.error(`Invalid LTP for ${tsym}: ${positionLTPs.value[tsym]}`)
-      console.log('Using fallback LTP from position data')
+      if (currentLTP !== 0) console.error(`Invalid LTP for ${tsym}: ${positionLTPs.value[tsym]}`)
+
       // Try to get LTP from position data as fallback
-      const fallbackLtp = parseFloat(position.lp || position.avgPrice || position.prc)
-      if (!isNaN(fallbackLtp)) {
+      const fallbackLtp = parseFloat(position.lp || position.avgPrice || position.prc || position.netavgprc)
+      if (!isNaN(fallbackLtp) && fallbackLtp > 0) {
         console.log(`Using fallback LTP for ${tsym}: ${fallbackLtp}`)
         positionLTPs.value[tsym] = fallbackLtp
         continue // Restart the check for this position in the next cycle with the updated LTP
       } else {
-        console.error(`No valid LTP found for ${tsym}`)
+        if (currentLTP !== 0) console.error(`No valid LTP found for ${tsym}`)
         continue // Skip this position for now
       }
     }

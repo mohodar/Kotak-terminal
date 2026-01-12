@@ -116,156 +116,144 @@ async function checkAndUpdateFiles(broker, customNames = []) {
 }
 
 async function downloadKotakFiles(credentials) {
-    const { usersession, consumerKey } = credentials;
-    // We try the standard constructed URL pattern
-    // Pattern: https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{YYYY-MM-DD}/transformed/{segment}.csv
+    const { usersession, consumerKey, sid, baseUrl } = credentials;
+    // According to documentation, we must first fetch the dynamic file paths
+    // Endpoint: GET <Base URL>/script-details/1.0/masterscrip/file-paths
+    // Header: Authorization: <plain token>
 
-    // Fallback if Date is not today (e.g. for testing)
-    const dateStr = formatISO(new Date()).split('T')[0];
     const segments = ['nse_fo', 'bse_fo'];
-    const segmentMap = {};
+    console.log(`Starting Kotak Neo symbol download using dynamic file-paths API...`);
 
-    console.log(`Starting Kotak Neo symbol download for date: ${dateStr}`);
-
-    // Attempt to fetch dynamic paths first
     try {
-        const scripMasterUrl = `${credentials.baseUrl}/script-details/1.0/masterscrip/file-paths`;
-        console.log(`Requesting file paths from: ${scripMasterUrl}`);
+        // Step 1: Request dynamic file paths
+        // Use the baseUrl provided in tradeApiValidate response or fallback to napi
+        const effectiveBaseUrl = baseUrl || "https://napi.kotaksecurities.com";
+        const scripMasterUrl = `${effectiveBaseUrl}/script-details/1.0/masterscrip/file-paths`;
+
+        console.log(`Requesting Kotak file paths from: ${scripMasterUrl}`);
 
         const pathResponse = await axios.get(scripMasterUrl, {
             headers: {
-                'Authorization': credentials.consumerKey || usersession, // Match Trade API pattern (no Bearer)
-                'Sid': credentials.sid,
+                'Authorization': consumerKey, // Documentation says "Token provided in dashboard"
+                'Sid': sid,
                 'Auth': usersession,
                 'neo-fin-key': 'neotradeapi',
                 'accept': 'application/json'
             }
         });
 
-        console.log("Kotak API Path Response:", JSON.stringify(pathResponse.data));
-        // If successful, we would parse `pathResponse.data` here. 
-        // For now, let's just see if it works or gives 404/401.
-    } catch (e) {
-        console.error(`API Path Fetch Failed: ${e.message} (Status: ${e.response?.status})`);
-
-        // Try alternate endpoint spelling found in some docs
-        try {
-            const altUrl = "https://gw-napi.kotaksecurities.com/script-details/1.0/masterscrip/file-paths";
-            console.log(`Trying alternate URL: ${altUrl}`);
-            const altResp = await axios.get(altUrl, {
-                headers: {
-                    'Authorization': `Bearer ${usersession}`,
-                    'Sid': credentials.sid,
-                    'Auth': usersession,
-                    'neo-fin-key': 'neotradeapi',
-                    'accept': 'application/json'
-                }
-            });
-            console.log("Alternate API Response:", JSON.stringify(altResp.data));
-        } catch (e2) {
-            console.error(`Alternate API Failed: ${e2.message}`);
-        }
-    }
-
-    for (const segment of segments) {
-        const fileName = `kotak_${segment}.csv`;
-        const filePath = path.join(symbolsFolder, fileName);
-        // Use dynamic URL if found, else fallback to constructed one
-        const fileUrl = segmentMap[segment] || `https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/${dateStr}/transformed/${segment}.csv`;
-
-        if (!isFileOutdated(filePath)) {
-            // console.log(`${fileName} is up to date.`);
-            continue;
+        if (!pathResponse.data || !pathResponse.data.data || !pathResponse.data.data.filesPaths) {
+            console.error("Kotak API Path Response missing data:", JSON.stringify(pathResponse.data));
+            throw new Error("Failed to get dynamic file paths from Kotak API");
         }
 
-        let writer;
-        try {
-            console.log(`Downloading ${fileName} from ${fileUrl}...`);
-            writer = fs.createWriteStream(filePath);
+        const filesPaths = pathResponse.data.data.filesPaths;
+        console.log(`Found ${filesPaths.length} file paths from Kotak API.`);
 
-            // Clean WSO2 Headers: User-Agent + Bearer Token (access_token prefers)
-            const token = credentials.access_token || usersession;
-            const headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                'Authorization': token, // No 'Bearer ' prefix to match Trade API pattern
-                'neo-fin-key': 'neotradeapi'
-            };
+        for (const segment of segments) {
+            // Find the URL for this segment (e.g., ends with nse_fo.csv)
+            const fileUrl = filesPaths.find(p => p.toLowerCase().includes(`${segment}.csv`));
 
-            // Step 1: Request with maxRedirects: 0 to catch the redirect
-            let response = await axios({
-                url: fileUrl,
-                method: 'GET',
-                headers: headers,
-                maxRedirects: 0,
-                responseType: 'stream',
-                validateStatus: status => status >= 200 && status < 401 // Catch 3xx
-            });
-
-            // Step 2: Handle Redirect (302/301/307)
-            if (response.status >= 300 && response.status < 400 && response.headers.location) {
-                console.log(`Redirect detected to S3. Following without headers...`);
-                // Follow redirect WITHOUT Auth headers (S3 rejects them)
-                response = await axios({
-                    url: response.headers.location,
-                    method: 'GET',
-                    responseType: 'stream',
-                    headers: {
-                        "User-Agent": headers["User-Agent"] // Keep UA, explicitly DROP Auth and neo-fin-key
-                    },
-                    transformRequest: [(data, headers) => {
-                        // Double tap: Explicitly delete headers in transformRequest to be sure
-                        delete headers['Authorization'];
-                        delete headers['neo-fin-key'];
-                        delete headers['common']['Authorization'];
-                        return data;
-                    }]
-                });
+            if (!fileUrl) {
+                console.warn(`No URL found for segment ${segment} in API response.`);
+                continue;
             }
 
-            response.data.pipe(writer);
+            const fileName = `kotak_${segment}.csv`;
+            const filePath = path.join(symbolsFolder, fileName);
 
-            await new Promise((resolve, reject) => {
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-                response.data.on('error', reject);
-            });
-            console.log(`Successfully downloaded ${fileName}`);
-        } catch (error) {
-            console.error(`Failed to download ${fileName}: ${error.message}`);
-            // Check nested response for S3 XML error
-            if (error.response && error.response.data) {
-                try {
-                    if (Buffer.isBuffer(error.response.data) || typeof error.response.data === 'string') {
-                        console.error("Server Error Details:", error.response.data.toString());
-                    } else {
-                        // Stream reading
-                        const chunks = [];
-                        for await (const chunk of error.response.data) {
-                            chunks.push(chunk);
-                        }
-                        console.error("Server Error Details:", Buffer.concat(chunks).toString());
+            // We force download if we are here (called from symbols route when outdated/missing)
+            console.log(`Downloading ${fileName} from dynamic URL...`);
+
+            let writer = fs.createWriteStream(filePath);
+            try {
+                // Step 2: Download from S3/S3-Proxy
+                const jwtToken = usersession.startsWith('eyJ') ? `Bearer ${usersession}` : usersession;
+
+                let downloadResponse;
+                const strategies = [
+                    { name: 'JWT', headers: { 'Authorization': jwtToken, 'Auth': usersession, 'Sid': sid, 'neo-fin-key': 'neotradeapi', 'User-Agent': 'Mozilla/5.0' } },
+                    { name: 'ConsumerKey', headers: { 'Authorization': consumerKey, 'neo-fin-key': 'neotradeapi', 'User-Agent': 'Mozilla/5.0' } },
+                    { name: 'NoAuth', headers: { 'User-Agent': 'Mozilla/5.0' } }
+                ];
+
+                for (const strategy of strategies) {
+                    try {
+                        console.log(`Trying ${strategy.name} strategy for ${segment}...`);
+                        downloadResponse = await axios({
+                            url: fileUrl,
+                            method: 'GET',
+                            headers: strategy.headers,
+                            maxRedirects: 0,
+                            responseType: 'stream',
+                            validateStatus: status => status >= 200 && status < 400
+                        });
+                        console.log(`${strategy.name} strategy SUCCESSFUL for ${segment}.`);
+                        break; // Success!
+                    } catch (err) {
+                        console.error(`${strategy.name} strategy failed for ${segment}: ${err.response?.status || err.message}`);
+                        if (strategy.name === 'NoAuth') throw new Error(`All download strategies failed for ${segment}`);
                     }
-                } catch (e) { }
-            }
-
-            if (writer) {
-                try { writer.end(); writer.destroy(); } catch (e) { }
-            }
-
-            // Clean up empty/partial file so fallback works
-            if (fs.existsSync(filePath)) {
-                try {
-                    await new Promise(r => setTimeout(r, 100));
-                    fs.unlinkSync(filePath);
-                    console.log(`Deleted incomplete file: ${filePath}`);
-                } catch (delErr) {
-                    console.error("Error deleting incomplete file:", delErr.message);
                 }
-            }
 
-            if (error.response && error.response.status === 404) {
-                console.warn("File not found (404). It might be too early in the day or a holiday.");
+                // Handle Redirect to S3
+                if (downloadResponse.status >= 300 && downloadResponse.status < 400 && downloadResponse.headers.location) {
+                    console.log(`Redirecting to ${segment} S3 location. Dropping Authorization headers...`);
+                    downloadResponse = await axios({
+                        url: downloadResponse.headers.location,
+                        method: 'GET',
+                        responseType: 'stream',
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0'
+                            // NO Authorization or neo-fin-key here
+                        }
+                    });
+                }
+
+                // Check for XML error response (AccessDenied) before writing to file
+                // We peek at the first chunk of data
+                await new Promise((resolve, reject) => {
+                    let firstChunk = true;
+                    downloadResponse.data.on('data', (chunk) => {
+                        if (firstChunk) {
+                            firstChunk = false;
+                            const preview = chunk.slice(0, 100).toString();
+                            if (preview.includes('<?xml') || preview.includes('<Error>')) {
+                                writer.destroy();
+                                reject(new Error(`Download for ${segment} returned XML error instead of CSV: ${preview}...`));
+                                return;
+                            }
+                        }
+                        writer.write(chunk);
+                    });
+
+                    downloadResponse.data.on('end', () => {
+                        writer.end();
+                        resolve();
+                    });
+
+                    downloadResponse.data.on('error', (err) => {
+                        writer.destroy();
+                        reject(err);
+                    });
+
+                    writer.on('error', (err) => {
+                        writer.destroy();
+                        reject(err);
+                    });
+                });
+
+                console.log(`Successfully downloaded ${fileName}`);
+            } catch (error) {
+                console.error(`Failed to download ${fileName}: ${error.message}`);
+                if (writer) writer.destroy();
+                if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             }
+        }
+    } catch (error) {
+        console.error(`Kotak Scrip Master workflow failed: ${error.message}`);
+        if (error.response) {
+            console.error("Error Response Data:", JSON.stringify(error.response.data));
         }
     }
 }

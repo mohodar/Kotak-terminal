@@ -389,18 +389,36 @@ module.exports = (storedCredentials) => {
     ];
 
     // Helper to map columns from any source to standardized format
-    const mapRow = (row) => {
-      // Kotak: pTrdSymbol, lToken/lKey, lLotSize, pExpiryDate, dStrikePrice, pOptionType
+    const mapRow = (row, isKotak = false, segment = '') => {
+      // Kotak: pTrdSymbol, lToken/lKey, lLotSize, pExpiryDate (EPOCH), dStrikePrice, pOptionType
       // Flattrade: Tradingsymbol, Token, Lotsize, Expiry, Strike, Optiontype
       // Shoonya: TradingSymbol, Token, LotSize, Expiry, StrikePrice, OptionType
+
+      let expiryDate = row["Expiry"] || row["pExpiryDate"] || row["expDt"] || row["lExpiryDate "] || row["lExpiryDate"];
+
+      // Kotak specific date handling
+      if (isKotak && expiryDate) {
+        let epoch = parseInt(expiryDate);
+        if (!isNaN(epoch)) {
+          // nse_fo and cde_fo: Add 315511200 to the epoch value and convert it to IST.
+          // mcx_fo and bse_fo: Epoch (lExpiryDate) can be directly converted into human readable date.
+          if (segment.includes('nse_fo') || segment.includes('cde_fo')) {
+            epoch += 315511200;
+          }
+          const dateObj = new Date(epoch * 1000);
+          const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+          expiryDate = `${String(dateObj.getDate()).padStart(2, '0')}-${months[dateObj.getMonth()]}-${dateObj.getFullYear()}`;
+        }
+      }
+
       return {
-        tradingSymbol: row["Tradingsymbol"] || row["pTrdSymbol"] || row["trdSym"] || row["TradingSymbol"],
-        securityId: row["Token"] || row["lKey"] || row["lToken"] || row["Key"],
-        expiryDate: row["Expiry"] || row["pExpiryDate"] || row["expDt"],
-        strikePrice: parseFloat(row["Strike"] || row["dStrikePrice"] || row["strkPrc"] || row["StrikePrice"]),
-        lotsize: parseInt(row["Lotsize"] || row["lLotSize"] || row["lotSz"] || row["LotSize"]),
-        optionType: row["Optiontype"] || row["pOptionType"] || row["optTp"] || row["OptionType"],
-        symbol: row["Symbol"] || row["pSymbol"] || row["uSym"]
+        tradingSymbol: row["pTrdSymbol"] || row["Tradingsymbol"] || row["trdSym"] || row["TradingSymbol"],
+        securityId: (isKotak && row["pSymbol"]) || row["lToken"] || row["lKey"] || row["Token"] || row["Key"] || row["pScripRefKey"],
+        expiryDate: expiryDate,
+        strikePrice: parseFloat(row["dStrikePrice;"] || row["dStrikePrice"] || row["Strike"] || row["strkPrc"] || row["StrikePrice"]) / (isKotak ? 100 : 1),
+        lotsize: parseInt(row["lLotSize"] || row["Lotsize"] || row["lotSz"] || row["LotSize"]),
+        optionType: row["pOptionType"] || row["Optiontype"] || row["optTp"] || row["OptionType"],
+        symbol: row["pSymbolName"] || row["pSymbol"] || row["Symbol"] || row["uSym"]
       };
     };
 
@@ -409,14 +427,15 @@ module.exports = (storedCredentials) => {
       return new Promise((resolve, reject) => {
         const rows = [];
         const processRow = (rawRow) => {
-          const row = mapRow(rawRow);
+          const row = mapRow(rawRow, source.isKotak, segment);
           // Filter logic: Check if symbol matches masterSymbol
-          // Flattrade uses 'Symbol'. Kotak might use 'pSymbol' or we check start of tradingSymbol.
-          // We use a broader check: exact match on symbol OR tradingSymbol starts with masterSymbol (cleaned)
-          if ((row.symbol && row.symbol.toUpperCase() === masterSymbol) ||
-            (row.tradingSymbol && row.tradingSymbol.startsWith(masterSymbol))) {
-            // Double check to handle similar prefixes based on pure master symbol if possible, 
-            // but for now lenient is better for fallback
+          // Kotak uses 'pSymbol' (e.g., NIFTY 50). 
+          // Flattrade uses 'Symbol' (e.g., NIFTY).
+          const rowSymbol = (row.symbol || "").toUpperCase();
+          const master = masterSymbol.toUpperCase();
+
+          if (rowSymbol === master || (source.isKotak && rowSymbol === `${master} 50`) ||
+            (row.tradingSymbol && row.tradingSymbol.startsWith(master))) {
             rows.push(row);
           }
         };
@@ -461,14 +480,22 @@ module.exports = (storedCredentials) => {
     // Loop through sources until we find data
     for (const source of sources) {
       // 1. Check existence / Download logic for Kotak
-      if (source.isKotak && isFileOutdated(source.path)) {
-        try {
-          console.log(`Kotak file outdated/missing. Attempting download...`);
-          // Only try if we have credentials, else skip download attempt
-          if (storedCredentials.kotakneo.usersession) {
-            await downloadKotakFiles(storedCredentials.kotakneo);
+      if (source.isKotak) {
+        if (isFileOutdated(source.path)) {
+          try {
+            console.log(`Kotak file ${source.path} outdated/missing. Attempting lazy download...`);
+            // Only try if we have credentials, else skip download attempt
+            if (storedCredentials.kotakneo.usersession) {
+              await downloadKotakFiles(storedCredentials.kotakneo);
+            } else {
+              console.warn("Kotak credentials missing (not logged in?), skipping lazy download check.");
+            }
+          } catch (e) {
+            console.error("Kotak download failed:", e.message);
           }
-        } catch (e) { console.error("Kotak download failed:", e.message); }
+        } else {
+          console.log(`Kotak symbol file ${source.path} is up-to-date.`);
+        }
       }
 
       if (!fs.existsSync(source.path)) {

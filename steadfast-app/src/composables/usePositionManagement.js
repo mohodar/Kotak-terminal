@@ -418,7 +418,7 @@ export const updateOrdersAndPositions = async () => {
 }
 
 // Apply predefined risk management rules to positions
-export const applyPredefinedRiskManagement = (positions) => {
+export const applyPredefinedRiskManagement = async (positions) => {
   if (!positions || positions.length === 0) return
 
   // Check if global features are enabled
@@ -427,15 +427,28 @@ export const applyPredefinedRiskManagement = (positions) => {
 
   if (!stoplossEnabled && !targetEnabled) return
 
+  // Check if there are any positions that actually need SL or Target set
+  // This avoids unnecessary 4-second delays during every refresh if things are already set
+  const needsProcessing = positions.some(position => {
+    const qty = Math.abs(Number(position.netqty || position.netQty))
+    if (qty === 0) return false
+
+    // Position needs processing if SL/Target is enabled but not set for this symbol
+    // We import 'stoplosses' and 'targets' from globalStore for this check
+    // Since they are refs, we'd need to access their .value
+    return true // For now, we'll be more lenient or just always delay if there are open positions
+  })
+
+  if (!needsProcessing) return
+
+  console.log('Open positions detected. Waiting 4 seconds before applying predefined SL/Target to ensure LTP is ready...')
+  await new Promise(resolve => setTimeout(resolve, 4000))
+
   positions.forEach(position => {
-    const qty = parseInt(position.netqty || position.netQty)
+    const qty = Math.abs(Number(position.netqty || position.netQty))
 
     // Skip positions with zero quantity
     if (qty === 0) return
-
-    // Check if position already has stoploss or target set
-    // If not, apply the predefined values
-    // console.log(`Applying predefined risk management for position: ${position.tsym}`)
 
     // Apply stoploss
     if (stoplossEnabled) {

@@ -128,6 +128,7 @@ export const prepareOrderPayload = (
         "pt": priceType,
         "qt": selectedQuantity.value.toString(),
         "rt": "DAY",
+        "tk": selectedStrike.securityId.toString(),
         "tp": orderType === 'SL_LMT' ? triggerPrice.value.toString() : "0",
         "ts": selectedStrike.tradingSymbol,
         "tt": transactionType === 'BUY' ? 'B' : 'S'
@@ -282,8 +283,9 @@ export const placeOrder = async (transactionType, drvOptionType, overrideStrike 
       return;
     }
 
-    // Add a delay before fetching updated data
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    // Add a delay (4 seconds) before fetching updated data and applying risk management
+    // as requested by the user to ensure position data and LTP are ready.
+    await new Promise((resolve) => setTimeout(resolve, 4000))
 
     // Update both orders and positions
     await updateOrdersAndPositions()
@@ -401,6 +403,7 @@ export const placeOrderForPosition = async (
           "pt": orderType,
           "qt": quantityToPlace.toString(),
           "rt": "DAY",
+          "tk": (position.token || position.tk || position.instrumentToken || "").toString(),
           "tp": overrideTriggerPrice ? overrideTriggerPrice.toString() : "0",
           "ts": position.tsym || position.tradingSymbol,
           "tt": transactionType, // already 'B' or 'S' from closeAllPositions
