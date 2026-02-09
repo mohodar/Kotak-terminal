@@ -57,6 +57,7 @@ module.exports = (storedCredentials) => {
     const isValid = (val) => val && val !== "null" && val !== "undefined";
 
     // Force V2 domain for legacy domains like mis/cis
+    // Force V2 domain for legacy domains like mis/cis
     // Force V2 domain logic REMOVED to respect API response
     // if (finalBaseUrl && finalBaseUrl.includes("kotaksecurities.com") && !finalBaseUrl.includes("napi") && !finalBaseUrl.includes("cnapi")) {
     //   console.warn(`Force-syncing legacy base URL ${finalBaseUrl} to https://napi.kotaksecurities.com`);
