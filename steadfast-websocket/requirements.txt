@@ -3,4 +3,4 @@ websocket_client
 requests
 NorenRestApi
 python-dotenv
-neo_api_client
+git+https://github.com/Priyanka15802/Neo_sdk_v2.git#egg=neo_api_client
